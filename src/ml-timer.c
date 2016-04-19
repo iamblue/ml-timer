@@ -1,21 +1,13 @@
 #include <string.h>
 
-#include "jerry.h"
-#include "hal_gpt.h"
+#include "FreeRTOS.h"
+#include "timers.h"
+#include "task.h"
 
 #include "microlattice.h"
 
-typedef struct
-{
-    uint32_t time;
-    uint32_t flag;
-    uint32_t count;
-} gpt_sample_t;
-
-jerry_api_value_t callback_j0;
-
-gpt_sample_t gpt_sample0;
-
+#include "jerry.h"
+#include "hal_gpt.h"
 
 #define  TIMER_32K_COUNT   (32*500)                     //32K unit,500ms
 #define  SYSTICK_COUNT     (2000/portTICK_PERIOD_MS)    //2000ms
@@ -28,48 +20,113 @@ static uint32_t get_current_milisecond()
     return (count * 1000) / 32768;
 }
 
-DELCARE_HANDLER(__getTime) {
+DELCARE_HANDLER(__getTime)
+{
   uint32_t time_record = get_current_milisecond();
   ret_val_p->type = JERRY_API_DATA_TYPE_FLOAT64;
   ret_val_p->v_float64 = time_record;
 
   return true;
 }
+static int serial_nubmer = 0;
 
-static void user_gpt_callback0 (gpt_sample_t *parameter) {
-  char script [] = "global.eventStatus.emit('timeout', true);";
-  jerry_api_value_t eval_ret;
-  jerry_api_eval (script, strlen (script), false, false, &eval_ret);
-  jerry_api_release_value (&eval_ret);
+void setTimeout_task(void *parameter)
+{
+  const int args_cnt = 2;
+
+  jerry_api_value_t *arg_clone = ((jerry_api_value_t *)parameter);
+  TimerHandle_t setTimeout_timer;
+  void setTimeOutTimerCallback( TimerHandle_t pxTimer ) {
+    jerry_api_call_function(arg_clone[0].v_object, NULL, false, NULL, 0);
+    // release object and string, if any
+    for(int i = 0; i < args_cnt; ++i)
+    {
+      switch(arg_clone[i].type)
+      {
+        case JERRY_API_DATA_TYPE_OBJECT:
+            jerry_api_release_object(arg_clone[i].v_object);
+            break;
+        case JERRY_API_DATA_TYPE_STRING:
+            jerry_api_release_string(arg_clone[i].v_string);
+            break;
+      }
+    }
+
+    xTimerDelete(pxTimer, portMAX_DELAY);
+
+    free(arg_clone);
+    arg_clone = NULL;
+
+  }
+
+  char task_name[25] = {0};
+  snprintf(task_name, 25, "TimerMain%d", serial_nubmer);
+
+  setTimeout_timer = xTimerCreate(task_name, ((int)arg_clone[1].v_float32 / portTICK_RATE_MS), pdFALSE, (void *)0, setTimeOutTimerCallback);
+  xTimerStart( setTimeout_timer, 0 );
+  vTaskDelete( NULL );
 }
 
-hal_gpt_running_status_t running_status0;
-hal_gpt_status_t         ret_status0;
+void setTimeOutTimerCallback( TimerHandle_t pxTimer ) {
+  jerry_api_value_t *arg_clone_timer = pvTimerGetTimerID(pxTimer);
+  const args_cnt = 2;
+  jerry_api_call_function(arg_clone_timer[0].v_object, NULL, false, NULL, 0);
+  // release object and string, if any
+  for(int i = 0; i < args_cnt; ++i)
+  {
+    switch(arg_clone_timer[i].type)
+    {
+      case JERRY_API_DATA_TYPE_OBJECT:
+          jerry_api_release_object(arg_clone_timer[i].v_object);
+          break;
+      case JERRY_API_DATA_TYPE_STRING:
+          jerry_api_release_string(arg_clone_timer[i].v_string);
+          break;
+    }
+  }
 
-DELCARE_HANDLER(__setTimeout) {
+  xTimerDelete(pxTimer, portMAX_DELAY);
 
-  hal_gpt_port_t gpt_port;
-  gpt_port = 0;
+  free(arg_clone_timer);
+  arg_clone_timer = NULL;
 
-  hal_gpt_get_running_status(gpt_port, &running_status0);        //get running status to check if this port is used or idle.
-  // if ( running_status0 != HAL_GPT_STOPPED ) {                         //if timer is running, exception handle
-  //    //exception handler
-  // }
-  ret_status0 = hal_gpt_init(gpt_port);                               //set the GPT base environment.
-  // if(HAL_GPT_STATUS_OK != ret_status0) {
-  //    //error handler
-  // }
-  callback_j0 = args_p[0];
-  hal_gpt_register_callback(gpt_port, user_gpt_callback0, (void *) &gpt_sample0); //register a user callback.
-  hal_gpt_start_timer_ms(gpt_port, (int)args_p[0].v_float32, HAL_GPT_TIMER_TYPE_REPEAT);
+}
 
-  ret_val_p->type = JERRY_API_DATA_TYPE_BOOLEAN;
-  ret_val_p->v_bool = true;
+DELCARE_HANDLER(setTimeout)
+{
+  serial_nubmer = serial_nubmer + 1;
+  assert(args_cnt == 2);
+  const size_t array_size = sizeof(jerry_api_value_t) * args_cnt;
+  jerry_api_value_t *arg_clone = malloc(array_size);
+  memcpy(arg_clone, args_p, array_size);
+
+  // acquire object and string, if any
+  for(int i = 0; i < args_cnt + 1; ++i)
+  {
+    switch(arg_clone[i].type)
+    {
+      case JERRY_API_DATA_TYPE_OBJECT:
+          arg_clone[i].v_object = jerry_api_acquire_object(arg_clone[i].v_object);
+          break;
+      case JERRY_API_DATA_TYPE_STRING:
+          arg_clone[i].v_string = jerry_api_acquire_string(arg_clone[i].v_string);
+          break;
+    }
+  }
+  TimerHandle_t setTimeout_timer;
+
+  char task_name[25] = {0};
+
+  snprintf(task_name, 25, "TimerMain%d", serial_nubmer);
+
+  setTimeout_timer = xTimerCreate(task_name, ((int)arg_clone[1].v_float32 / portTICK_RATE_MS), pdFALSE, arg_clone, setTimeOutTimerCallback);
+  xTimerStart( setTimeout_timer, 0 );
 
   return true;
 }
 
-DELCARE_HANDLER(__loop) {
+DELCARE_HANDLER(__loop)
+{
   if (args_cnt == 2 && args_p[0].type == JERRY_API_DATA_TYPE_OBJECT) {
     ret_val_p->type = JERRY_API_DATA_TYPE_BOOLEAN;
     ret_val_p->v_bool = true;
@@ -81,8 +138,9 @@ DELCARE_HANDLER(__loop) {
   return true;
 }
 
-void ml_timer_init(void) {
+void ml_timer_init(void)
+{
   REGISTER_HANDLER(__loop);
   REGISTER_HANDLER(__getTime);
-  REGISTER_HANDLER(__setTimeout);
+  REGISTER_HANDLER(setTimeout);
 }
