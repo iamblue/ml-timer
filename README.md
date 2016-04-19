@@ -2,7 +2,7 @@
 
 ## API
 
-* __loop
+* __loop (Sync)
 
 ``` js
   __loop(
@@ -12,10 +12,26 @@
 
 ```
 
+* setTimeout (Async)
+
+``` js
+  setTimeout(
+    function, // function
+    timer,    // nubmer
+  )
+
+```
+
+
 ## Example
 
 ``` js
-  // every 2s loop this function
+  // Async, every 2s loop this function
+  __loop(function() {
+    print(123);
+  }, 2000);
+
+  // Sync, every 2s loop this function
   __loop(function() {
     print(123);
   }, 2000);
